@@ -26,6 +26,17 @@ static int afe;
 #define RW_NCNB     (AP_RW|DOMAIN0|NCNB|DESC_SEC)   /* Read/Write without cache and write buffer */
 #define RW_CB       (AP_RW|DOMAIN0|CB|DESC_SEC)     /* Read/Write, cache, write back */
 
+/**********************************************************/
+#define DESC_ONE        (0x1)
+#define DOMAIN1         (0x1<<5)
+#define ATTR_INNER      (DESC_ONE | DOMAIN1)
+#define RW_FA           ((0<<9)|(3<<4)) //AP[2] | AP[1:0], read/write full access
+#define WB_WA           (7 << 6) //TEX ,write back ,write allocate
+#define S               (1<<10) //sharable
+#define nG              (1<<11) // non global
+#define ATTR_OUTER      (DESC_SEC | RW_FA | WB_WA | S | nG)
+
+
 static unsigned int pa2va(unsigned int pa)
 {
     unsigned int va;
@@ -215,6 +226,7 @@ int mmu_dump(void)
 }
 
 static volatile unsigned int _page_table[4*1024] __attribute__((aligned(16*1024)));
+// static volatile unsigned int _page_table2[256] __attribute__((aligned(4*1024)));//small page
 void mmu_setmtt(unsigned int vaddrStart, unsigned int vaddrEnd, unsigned int paddrStart, unsigned int attr)
 {
     volatile unsigned int *pTT;
@@ -225,6 +237,22 @@ void mmu_setmtt(unsigned int vaddrStart, unsigned int vaddrEnd, unsigned int pad
     {
         *pTT = attr |(((paddrStart>>20)+i)<<20);
         pTT++;
+    }
+}
+//set Small Page Table
+void mmu_setpg(unsigned int vaddrStart,unsigned int pageTableBassAddress,
+                unsigned int paddrStart)
+{
+    volatile unsigned int *pTT;
+    volatile unsigned int *pTT2;
+    volatile int j;
+    pTT=(unsigned int *)_page_table+(vaddrStart>>20);
+    pTT2=(unsigned int *)pageTableBassAddress;
+    *pTT = ATTR_INNER | ((pageTableBassAddress>>10)<<10);
+
+    for(j =0; j < 256 ; j++){
+        *pTT2 = ATTR_OUTER | (((paddrStart>>12)+j)<<12);
+        pTT2++;
     }
 }
 
@@ -244,12 +272,14 @@ int _start(void)
     mmu_setmtt(0xC0000000, 0xC8000000-1, 0xC0000000, RW_CB);    /* 128M cached DDR memory       */
     mmu_setmtt(0xD0000000, 0xD8000000-1, 0xC0000000, RW_NCNB);  /* 128M none-cached DDR memory */
     mmu_setmtt(0x80000000, 0x80020000-1, 0x80000000, RW_CB);    /* 128k OnChip memory           */
+    mmu_setpg(0x90000000,0xA0600000,0xC0000000);
+    mmu_setpg(0x90100000,0xA0700000,0xC0000000);
+    mmu_setpg(0x90200000,0xA0800000,0xC0000000);
 
     CP15Ttb0Set((unsigned int*) _page_table);
     CP15MMUEnable();
     CP15ICacheEnable();
     CP15DCacheEnable();
-
     __asm__("mrc p15,0,%0,c1,c0,0" : "=r" (sctlr));
     __asm__("orr %0,%1,#1 ":"=r"(result):"r"(sctlr));
     printf("sctlr = %p \r\n",sctlr );
